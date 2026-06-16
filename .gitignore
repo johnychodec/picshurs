@@ -1,0 +1,23 @@
+.DS_Store
+/.build
+/Packages
+/*.xcodeproj
+*.xcworkspace
+xcuserdata/
+DerivedData/
+# SwiftPM / Xcode user state
+.swiftpm/configuration
+.swiftpm/xcode/xcuserdata
+.swiftpm/xcode/package.xcworkspace/xcuserdata
+.netrc
+.vscode/
+*.dmg
+*.zip
+*.app
+build/
+build_dmg.sh
+
+# Documentation files to ignore
+/ARCHITECTURE.md
+/BATTLE_PLAN.md
+/FIGMA_SPEC.md
