@@ -196,6 +196,13 @@ final class DatabaseManager {
             }
         }
 
+        migrator.registerMigration("v11") { db in
+            try db.alter(table: "photos") { t in
+                t.add(column: "mediaKind", .text).notNull().defaults(to: MediaKind.image.rawValue)
+            }
+            try db.create(index: "photos_on_mediaKind", on: "photos", columns: ["mediaKind"])
+        }
+
         try migrator.migrate(dbQueue)
     }
 }

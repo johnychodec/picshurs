@@ -66,7 +66,7 @@ actor ThumbnailService {
         }
     }
 
-    func thumbnail(for url: URL, modificationDate: Date, tier: Int = gridTier) async -> CGImage? {
+    func thumbnail(for url: URL, modificationDate: Date, tier: Int = gridTier, mediaKind: MediaKind = .image) async -> CGImage? {
         let path = url.path
         let key = cacheKey(for: path, modificationDate: modificationDate, tier: tier)
         let nsKey = key as NSString
@@ -90,7 +90,8 @@ actor ThumbnailService {
 
         if Task.isCancelled { return nil }
 
-        if let image = imageIOThumbnail(for: url, maxPixelSize: tier) {
+        if mediaKind == .image,
+           let image = imageIOThumbnail(for: url, maxPixelSize: tier) {
             let cost = image.bytesPerRow * image.height
             saveToDisk(image, at: diskURL)
             cache.setObject(CGImageWrapper(image), forKey: nsKey, cost: cost)

@@ -47,7 +47,11 @@ actor OcrService {
         defer { isScanning = false }
 
         let urls: [String] = (try? await dbQueue.read { db in
-            try String.fetchAll(db, sql: "SELECT url FROM photos WHERE ocrScanned = 0")
+            try String.fetchAll(
+                db,
+                sql: "SELECT url FROM photos WHERE ocrScanned = 0 AND mediaKind = ?",
+                arguments: [MediaKind.image.rawValue]
+            )
         }) ?? []
 
         let total = urls.count

@@ -38,9 +38,8 @@ struct MapView: View {
             ForEach(geotagged) { photo in
                 Annotation(photo.filename, coordinate: photo.coordinate!) {
                     Button {
-                        viewModel.selectSingle(photo)
                         withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
-                            viewModel.isViewingPhoto = true
+                            viewModel.openMedia(photo)
                         }
                     } label: {
                         PinThumbnail(photo: photo)

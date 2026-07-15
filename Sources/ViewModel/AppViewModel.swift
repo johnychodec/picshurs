@@ -83,6 +83,11 @@ final class AppViewModel {
     var mapResetToken: Int = 0
     var libraryFolders: [LibraryFolder] = []
     var isViewingPhoto = false
+    enum ViewerZoomCommand: Equatable {
+        case `in`, out, reset
+    }
+    var viewerZoomCommandID: Int = 0
+    var viewerZoomCommand: ViewerZoomCommand?
     var searchText: String {
         get { _searchText }
         set {
@@ -95,6 +100,11 @@ final class AppViewModel {
     var lastError: String?
     var successMessage: String?
     private var successDismissTask: Task<Void, Never>?
+
+    func sendViewerZoomCommand(_ command: ViewerZoomCommand) {
+        viewerZoomCommand = command
+        viewerZoomCommandID += 1
+    }
 
     func showSuccess(_ message: String) {
         successMessage = message
@@ -110,6 +120,8 @@ final class AppViewModel {
     let settings: AppSettings
     private var fileWatcher: FileSystemWatcher?
     private var watcherDebounceTask: Task<Void, Never>?
+    private var externalVideoReturnURL: URL?
+    private var suppressGalleryCloseUntil: Date?
 
     private let libraryKey = "PicshursLibraryFolders"
     private let excludedLeafPathsKey = "PicshursExcludedLeafPaths"
@@ -185,10 +197,13 @@ final class AppViewModel {
 
     var filteredPhotos: [PhotoItem] { _filteredPhotos }
     private var _filteredPhotos: [PhotoItem] = []
+    var visiblePhotos: [PhotoItem] { _visiblePhotos }
+    private var _visiblePhotos: [PhotoItem] = []
     private(set) var groupedPhotos: [DateGroup] = []
     private(set) var folderGroups: [FolderGroup] = []
     private(set) var libraryYearGroups: [YearGroup] = []
     private var photoIndexByPath: [String: Int] = [:]
+    private var visiblePhotoIndexByPath: [String: Int] = [:]
 
     func photoIndex(for path: String) -> Int? {
         photoIndexByPath[path]
@@ -196,6 +211,9 @@ final class AppViewModel {
 
     private func rebuildFilteredPhotos() {
         var result = photos.sorted(by: _sortOrder.comparator(ascending: _sortAscending))
+        if !settings.showVideos {
+            result = result.filter { !$0.isVideo }
+        }
         if !_searchText.isEmpty {
             let query = _searchText.lowercased()
             result = result.filter { photo in
@@ -216,8 +234,9 @@ final class AppViewModel {
         }
         photoIndexByPath = indexMap
 
-        rebuildTotalDiskUsage()
+        rebuildTotalDiskUsage(for: result)
         rebuildGroupedViews()
+        rebuildVisiblePhotos()
     }
 
     private func rebuildGroupedViews() {
@@ -262,6 +281,84 @@ final class AppViewModel {
                 $0.leafName.localizedStandardCompare($1.leafName) == .orderedAscending
             })
         }.sorted { $0.year > $1.year }
+    }
+
+    private func navigationPhotos() -> [PhotoItem] {
+        switch displayMode {
+        case .library:
+            return libraryYearGroups.flatMap { year in
+                year.folderGroups.flatMap(\.photos)
+            }
+        case .folder, .year:
+            return _sortOrder == .date ? groupedPhotos.flatMap(\.photos) : filteredPhotos
+        case .tray:
+            return visibleTrayPhotoOrder
+        case .dot, .person, .map, .people:
+            return filteredPhotos
+        }
+    }
+
+    private func rebuildVisiblePhotos() {
+        let result = navigationPhotos()
+        _visiblePhotos = result
+
+        var indexMap = [String: Int]()
+        indexMap.reserveCapacity(result.count)
+        for (i, photo) in result.enumerated() {
+            indexMap[photo.url.path] = i
+        }
+        visiblePhotoIndexByPath = indexMap
+    }
+
+    func visiblePhotoIndex(for path: String) -> Int? {
+        visiblePhotoIndexByPath[path]
+    }
+
+    private struct SelectionSnapshot {
+        let selectedPath: String?
+        let selectedIndex: Int?
+        let temporarySelectionPaths: Set<String>
+        let wasViewingPhoto: Bool
+    }
+
+    private func makeSelectionSnapshot() -> SelectionSnapshot? {
+        guard let selected = selectedPhoto else { return nil }
+        return SelectionSnapshot(
+            selectedPath: selected.url.path,
+            selectedIndex: visiblePhotoIndex(for: selected.url.path),
+            temporarySelectionPaths: Set(temporarilySelectedPhotos.map(\.url.path)),
+            wasViewingPhoto: isViewingPhoto
+        )
+    }
+
+    private func restoreSelectionAfterReload(_ snapshot: SelectionSnapshot?) {
+        guard let snapshot else { return }
+        let current = visiblePhotos
+
+        guard !current.isEmpty else {
+            temporarilySelectedPhotos.removeAll()
+            selectedPhoto = nil
+            isViewingPhoto = false
+            return
+        }
+
+        let survivingTemporary = Set(snapshot.temporarySelectionPaths.compactMap { path in
+            current.first { $0.url.path == path }
+        })
+
+        if let selectedPath = snapshot.selectedPath,
+           let refreshed = current.first(where: { $0.url.path == selectedPath }) {
+            selectedPhoto = refreshed
+            temporarilySelectedPhotos = survivingTemporary.isEmpty ? [refreshed] : survivingTemporary
+            isViewingPhoto = snapshot.wasViewingPhoto
+            return
+        }
+
+        let fallbackIndex = min(max(0, snapshot.selectedIndex ?? 0), current.count - 1)
+        let fallback = current[fallbackIndex]
+        selectedPhoto = fallback
+        temporarilySelectedPhotos = survivingTemporary.isEmpty ? [fallback] : survivingTemporary
+        isViewingPhoto = snapshot.wasViewingPhoto
     }
 
     struct DateGroup: Identifiable, Equatable {
@@ -328,18 +425,26 @@ final class AppViewModel {
     }
 
     func photoCountForYear(_ year: Int) -> Int {
-        (try? DatabaseManager.shared.dbQueue.read { db in
-            try Int.fetchOne(db, sql: """
+        let showVideos = settings.showVideos
+        return (try? DatabaseManager.shared.dbQueue.read { db in
+            if showVideos {
+                return try Int.fetchOne(db, sql: """
+                    SELECT COUNT(*) FROM photos
+                    WHERE CAST(strftime('%Y', COALESCE(dateTakenOriginal, modificationDate)) AS INTEGER) = ?
+                """, arguments: [year])
+            }
+            return try Int.fetchOne(db, sql: """
                 SELECT COUNT(*) FROM photos
                 WHERE CAST(strftime('%Y', COALESCE(dateTakenOriginal, modificationDate)) AS INTEGER) = ?
-            """, arguments: [year])
+                  AND mediaKind != ?
+            """, arguments: [year, MediaKind.video.rawValue])
         }) ?? 0
     }
 
     private(set) var totalDiskUsage: String = ""
 
-    private func rebuildTotalDiskUsage() {
-        let total = photos.reduce(into: Int64(0)) { $0 += $1.fileSize }
+    private func rebuildTotalDiskUsage(for items: [PhotoItem]) {
+        let total = items.reduce(into: Int64(0)) { $0 += $1.fileSize }
         let formatter = ByteCountFormatter()
         formatter.countStyle = .file
         totalDiskUsage = formatter.string(fromByteCount: total)
@@ -347,6 +452,14 @@ final class AppViewModel {
 
     var trayPhotos: Set<PhotoItem> {
         temporarilySelectedPhotos.union(pinnedPhotos)
+    }
+
+    var visibleTrayPhotoOrder: [PhotoItem] {
+        settings.showVideos ? trayPhotoOrder : trayPhotoOrder.filter { !$0.isVideo }
+    }
+
+    var visibleTrayPhotos: Set<PhotoItem> {
+        Set(visibleTrayPhotoOrder)
     }
 
 
@@ -410,6 +523,7 @@ final class AppViewModel {
         let oldTemp = Array(temporarilySelectedPhotos)
         temporarilySelectedPhotos.removeAll()
         selectedPhoto = photo
+        clearExternalVideoReturnStateIfSelectionChanged()
         temporarilySelectedPhotos.insert(photo)
         addToTrayOrder(photo)
         for p in oldTemp {
@@ -422,19 +536,21 @@ final class AppViewModel {
             temporarilySelectedPhotos.remove(photo)
             if selectedPhoto == photo {
                 selectedPhoto = temporarilySelectedPhotos.first
+                clearExternalVideoReturnStateIfSelectionChanged()
             }
             removeFromTrayOrderIfNoLongerInTray(photo)
         } else {
             temporarilySelectedPhotos.insert(photo)
             selectedPhoto = photo
+            clearExternalVideoReturnStateIfSelectionChanged()
             addToTrayOrder(photo)
         }
     }
 
     func selectRange(from start: PhotoItem, to end: PhotoItem) {
-        let list = filteredPhotos
-        guard let startIdx = photoIndex(for: start.url.path),
-              let endIdx = photoIndex(for: end.url.path) else { return }
+        let list = visiblePhotos
+        guard let startIdx = visiblePhotoIndex(for: start.url.path),
+              let endIdx = visiblePhotoIndex(for: end.url.path) else { return }
         let range = min(startIdx, endIdx)...max(startIdx, endIdx)
         for i in range {
             let photo = list[i]
@@ -442,13 +558,15 @@ final class AppViewModel {
             addToTrayOrder(photo)
         }
         selectedPhoto = end
+        clearExternalVideoReturnStateIfSelectionChanged()
     }
 
     func selectAll() {
-        let cap = min(filteredPhotos.count, 200)
-        let capped = Array(filteredPhotos.prefix(cap))
+        let cap = min(visiblePhotos.count, 200)
+        let capped = Array(visiblePhotos.prefix(cap))
         temporarilySelectedPhotos = Set(capped)
         selectedPhoto = capped.first
+        clearExternalVideoReturnStateIfSelectionChanged()
         for photo in capped {
             addToTrayOrder(photo)
         }
@@ -458,6 +576,7 @@ final class AppViewModel {
         let removed = Array(temporarilySelectedPhotos)
         temporarilySelectedPhotos.removeAll()
         selectedPhoto = pinnedPhotos.first
+        clearExternalVideoReturnStateIfSelectionChanged()
         for photo in removed {
             removeFromTrayOrderIfNoLongerInTray(photo)
         }
@@ -471,6 +590,7 @@ final class AppViewModel {
         temporarilySelectedPhotos.remove(photo)
         if selectedPhoto == photo {
             selectedPhoto = temporarilySelectedPhotos.first ?? pinnedPhotos.first
+            clearExternalVideoReturnStateIfSelectionChanged()
         }
         removeFromTrayOrderIfNoLongerInTray(photo)
     }
@@ -498,11 +618,11 @@ final class AppViewModel {
         for i in photos.indices {
             if let update = updateMap[photos[i].url.path] { photos[i] = update }
         }
-        rebuildFilteredPhotos()
         if let current = selectedPhoto, let update = updateMap[current.url.path] { selectedPhoto = update }
         pinnedPhotos = Set(pinnedPhotos.map { updateMap[$0.url.path] ?? $0 })
         temporarilySelectedPhotos = Set(temporarilySelectedPhotos.map { updateMap[$0.url.path] ?? $0 })
         trayPhotoOrder = trayPhotoOrder.map { updateMap[$0.url.path] ?? $0 }
+        rebuildFilteredPhotos()
     }
 
     // MARK: - Pin / Unpin
@@ -631,6 +751,7 @@ final class AppViewModel {
         trayPhotoOrder.insert(item, at: finalIndex)
 
         persistTrayOrder()
+        if displayMode == .tray { rebuildVisiblePhotos() }
     }
 
     /// Moves a block of photos to the given drop zone, preserving their
@@ -665,6 +786,7 @@ final class AppViewModel {
         guard reordered != trayPhotoOrder else { return }
         trayPhotoOrder = reordered
         persistTrayOrder()
+        if displayMode == .tray { rebuildVisiblePhotos() }
     }
 
     private func persistTrayOrder() {
@@ -687,6 +809,7 @@ final class AppViewModel {
         guard !trayPhotoOrder.contains(photo) else { return }
         guard trayPhotoOrder.count < 200 else { return }
         trayPhotoOrder.append(photo)
+        if displayMode == .tray { rebuildVisiblePhotos() }
     }
 
     func addToTrayOrderIfNeeded(_ photo: PhotoItem) {
@@ -696,11 +819,13 @@ final class AppViewModel {
             return
         }
         trayPhotoOrder.append(photo)
+        if displayMode == .tray { rebuildVisiblePhotos() }
     }
 
     private func removeFromTrayOrderIfNoLongerInTray(_ photo: PhotoItem) {
         if !temporarilySelectedPhotos.contains(photo) && !pinnedPhotos.contains(photo) {
             trayPhotoOrder.removeAll { $0 == photo }
+            if displayMode == .tray { rebuildVisiblePhotos() }
         }
     }
 
@@ -742,13 +867,108 @@ final class AppViewModel {
         pinnedPhotos.removeAll()
         trayPhotoOrder.removeAll()
         selectedPhoto = nil
+        if displayMode == .tray { rebuildVisiblePhotos() }
     }
 
     // MARK: - Navigation / Viewer
 
+    var trayContainsVideos: Bool {
+        visibleTrayPhotoOrder.contains { $0.isVideo }
+    }
+
+    var selectedPhotosInVisibleOrder: [PhotoItem] {
+        let selectedPaths = Set(temporarilySelectedPhotos.map(\.url.path))
+        if selectedPaths.isEmpty {
+            if let selectedPhoto { return [selectedPhoto] }
+            return []
+        }
+        let ordered = visiblePhotos.filter { selectedPaths.contains($0.url.path) }
+        return ordered.isEmpty ? Array(temporarilySelectedPhotos) : ordered
+    }
+
+    var canRunPhotoOnlyTrayActions: Bool {
+        !trayContainsVideos
+    }
+
+    func handleVideoVisibilityChanged() {
+        if !settings.showVideos {
+            temporarilySelectedPhotos = temporarilySelectedPhotos.filter { !$0.isVideo }
+        }
+        rebuildFilteredPhotos()
+        guard !settings.showVideos, selectedPhoto?.isVideo == true else { return }
+        isViewingPhoto = false
+        isEditing = false
+        if let replacement = visiblePhotos.first {
+            selectSingle(replacement)
+        } else {
+            selectedPhoto = nil
+            temporarilySelectedPhotos.removeAll()
+        }
+    }
+
+    func openMedia(_ photo: PhotoItem) {
+        let preserveSelection = temporarilySelectedPhotos.contains(photo) && temporarilySelectedPhotos.count > 1
+        if preserveSelection {
+            selectedPhoto = photo
+            clearExternalVideoReturnStateIfSelectionChanged()
+        } else {
+            selectSingle(photo)
+        }
+        isViewingPhoto = true
+    }
+
+    func prepareForExternalVideoOpen(_ photo: PhotoItem) {
+        guard photo.isVideo else { return }
+        selectedPhoto = photo
+        isViewingPhoto = true
+        isEditing = false
+        externalVideoReturnURL = photo.url
+        suppressGalleryCloseUntil = Date().addingTimeInterval(2.0)
+    }
+
+    func openVideoInDefaultPlayer(_ photo: PhotoItem) {
+        guard photo.isVideo else { return }
+        prepareForExternalVideoOpen(photo)
+        if !NSWorkspace.shared.open(photo.url) {
+            externalVideoReturnURL = nil
+            suppressGalleryCloseUntil = nil
+            if selectedPhoto == photo {
+                isViewingPhoto = true
+            }
+            lastError = "Could not open this video."
+        }
+    }
+
+    func handleReturnFromExternalVideoPlayer() {
+        guard let externalVideoReturnURL,
+              selectedPhoto?.url == externalVideoReturnURL
+        else { return }
+        isViewingPhoto = true
+        isEditing = false
+        suppressGalleryCloseUntil = Date().addingTimeInterval(1.0)
+    }
+
+    func shouldSuppressGalleryCloseShortcut() -> Bool {
+        guard selectedPhoto?.isVideo == true,
+              externalVideoReturnURL == selectedPhoto?.url,
+              let suppressGalleryCloseUntil,
+              Date() <= suppressGalleryCloseUntil
+        else { return false }
+        self.suppressGalleryCloseUntil = nil
+        return true
+    }
+
+    func clearExternalVideoReturnStateIfSelectionChanged() {
+        guard let externalVideoReturnURL else { return }
+        if selectedPhoto?.url != externalVideoReturnURL {
+            self.externalVideoReturnURL = nil
+            suppressGalleryCloseUntil = nil
+        }
+    }
+
     func openSelectedPhoto() {
-        if selectedPhoto != nil {
-            isViewingPhoto = true
+        if let selectedPhoto {
+            openMedia(selectedPhoto)
         }
     }
 
@@ -757,14 +977,22 @@ final class AppViewModel {
     }
 
     func navigateBackward() {
-        guard !filteredPhotos.isEmpty else { return }
-        if isViewingPhoto {
-            guard let current = selectedPhoto,
-                  let idx = filteredPhotos.firstIndex(of: current), idx > 0 else { return }
-            selectSingle(filteredPhotos[idx - 1])
-        } else {
-            if let current = selectedPhoto, let idx = filteredPhotos.firstIndex(of: current), idx > 0 {
-                selectSingle(filteredPhotos[idx - 1])
+        let list = visiblePhotos
+        guard !list.isEmpty else { return }
+        if let current = selectedPhoto,
+           let idx = visiblePhotoIndex(for: current.url.path),
+           idx > 0 {
+            let target = list[idx - 1]
+            if isViewingPhoto {
+                openMedia(target)
+            } else {
+                selectSingle(target)
+            }
+        } else if let first = list.first {
+            if isViewingPhoto {
+                openMedia(first)
+            } else {
+                selectSingle(first)
             }
         }
     }
@@ -774,27 +1002,39 @@ final class AppViewModel {
     @ObservationIgnored var gridColumnCount: Int = 1
 
     func navigateRow(up: Bool) {
-        guard !filteredPhotos.isEmpty, gridColumnCount > 0 else { return }
+        let list = visiblePhotos
+        guard !list.isEmpty, gridColumnCount > 0 else { return }
         guard let current = selectedPhoto,
-              let idx = photoIndex(for: current.url.path) else {
-            if let first = filteredPhotos.first { selectSingle(first) }
+              let idx = visiblePhotoIndex(for: current.url.path) else {
+            if let first = list.first { selectSingle(first) }
             return
         }
         let target = up ? idx - gridColumnCount : idx + gridColumnCount
-        guard target >= 0, target < filteredPhotos.count else { return }
-        selectSingle(filteredPhotos[target])
+        guard target >= 0, target < list.count else { return }
+        if isViewingPhoto {
+            openMedia(list[target])
+        } else {
+            selectSingle(list[target])
+        }
     }
 
     func navigateForward() {
-        guard !filteredPhotos.isEmpty else { return }
-        if isViewingPhoto {
-            guard let current = selectedPhoto,
-                  let idx = filteredPhotos.firstIndex(of: current),
-                  idx < filteredPhotos.count - 1 else { return }
-            selectSingle(filteredPhotos[idx + 1])
-        } else {
-            if let current = selectedPhoto, let idx = filteredPhotos.firstIndex(of: current), idx < filteredPhotos.count - 1 {
-                selectSingle(filteredPhotos[idx + 1])
+        let list = visiblePhotos
+        guard !list.isEmpty else { return }
+        if let current = selectedPhoto,
+           let idx = visiblePhotoIndex(for: current.url.path),
+           idx < list.count - 1 {
+            let target = list[idx + 1]
+            if isViewingPhoto {
+                openMedia(target)
+            } else {
+                selectSingle(target)
+            }
+        } else if let first = list.first {
+            if isViewingPhoto {
+                openMedia(first)
+            } else {
+                selectSingle(first)
             }
         }
     }
@@ -806,14 +1046,19 @@ final class AppViewModel {
         if temporarilySelectedPhotos.count > 1 {
             batchDelete()
         } else {
-            let idx = filteredPhotos.firstIndex(of: current) ?? 0
+            let idx = visiblePhotoIndex(for: current.url.path) ?? 0
             guard deletePhotos([current]) else { return }
-            if filteredPhotos.isEmpty {
+            if visiblePhotos.isEmpty {
                 isViewingPhoto = false
                 clearAllFromTray()
             } else {
-                let newIndex = min(idx, filteredPhotos.count - 1)
-                selectSingle(filteredPhotos[newIndex])
+                let newIndex = min(idx, visiblePhotos.count - 1)
+                let next = visiblePhotos[newIndex]
+                if isViewingPhoto {
+                    openMedia(next)
+                } else {
+                    selectSingle(next)
+                }
             }
         }
     }
@@ -877,15 +1122,14 @@ final class AppViewModel {
     func batchDelete() {
         guard !temporarilySelectedPhotos.isEmpty else { return }
         let toDelete = Array(temporarilySelectedPhotos)
+        let fallbackIndex = selectedPhoto.flatMap { visiblePhotoIndex(for: $0.url.path) }
         deletePhotos(toDelete)
-        if filteredPhotos.isEmpty {
+        if visiblePhotos.isEmpty {
             isViewingPhoto = false
             clearAllFromTray()
         } else {
-            selectedPhoto = filteredPhotos.first
-            if let first = filteredPhotos.first {
-                temporarilySelectedPhotos.insert(first)
-            }
+            let index = min(fallbackIndex ?? 0, visiblePhotos.count - 1)
+            selectSingle(visiblePhotos[index])
         }
     }
 
@@ -1097,24 +1341,23 @@ final class AppViewModel {
     // MARK: - Tray Batch Operations
 
     func trayBatchDelete() {
-        guard !trayPhotos.isEmpty else { return }
-        let toDelete = Array(trayPhotos)
+        let toDelete = visibleTrayPhotoOrder
+        guard !toDelete.isEmpty else { return }
+        let fallbackIndex = selectedPhoto.flatMap { visiblePhotoIndex(for: $0.url.path) }
         deletePhotos(toDelete)
-        if filteredPhotos.isEmpty {
+        if visiblePhotos.isEmpty {
             isViewingPhoto = false
             clearAllFromTray()
         } else {
-            selectedPhoto = filteredPhotos.first
-            if let first = filteredPhotos.first {
-                temporarilySelectedPhotos.insert(first)
-            }
+            let index = min(fallbackIndex ?? 0, visiblePhotos.count - 1)
+            selectSingle(visiblePhotos[index])
         }
     }
 
     @MainActor
     func trayBatchExport() {
-        guard !trayPhotoOrder.isEmpty else { return }
-        let ordered = trayPhotoOrder
+        let ordered = visibleTrayPhotoOrder
+        guard !ordered.isEmpty else { return }
         let count = ordered.count
 
         guard let (destURL, template) = runExportPanel(
@@ -1147,20 +1390,21 @@ final class AppViewModel {
     }
 
     func trayBatchDuplicate() {
-        guard !trayPhotos.isEmpty else { return }
+        let ordered = visibleTrayPhotoOrder
+        guard !ordered.isEmpty else { return }
         let panel = NSOpenPanel()
         panel.title = "Choose destination folder"
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
         panel.prompt = "Duplicate"
-        panel.message = "Choose a folder to duplicate \(trayPhotos.count) photos"
+        panel.message = "Choose a folder to duplicate \(ordered.count) photos"
 
         guard panel.runModal() == .OK, let destURL = panel.url else { return }
         panel.orderOut(nil)
 
         var failures: [String] = []
-        for photo in trayPhotos {
+        for photo in ordered {
             let dest = destURL.appendingPathComponent(photo.filename)
             do { try FileManager.default.copyItem(at: photo.url, to: dest) }
             catch { failures.append(photo.filename) }
@@ -1168,14 +1412,18 @@ final class AppViewModel {
         if !failures.isEmpty {
             showAlert(message: "Failed to duplicate \(failures.count) file(s):\n\(failures.joined(separator: "\n"))")
         } else {
-            showSuccess("Duplicated \(trayPhotos.count) photo(s) to \(destURL.lastPathComponent)")
+            showSuccess("Duplicated \(ordered.count) photo(s) to \(destURL.lastPathComponent)")
         }
     }
 
     @MainActor
     func trayBatchExportNoMetadata() {
-        guard !trayPhotoOrder.isEmpty else { return }
-        let ordered = trayPhotoOrder
+        let ordered = visibleTrayPhotoOrder
+        guard !ordered.isEmpty else { return }
+        guard canRunPhotoOnlyTrayActions else {
+            showAlert(message: "Export without metadata is only available for photos.")
+            return
+        }
         let count = ordered.count
 
         guard let (destURL, template) = runExportPanel(
@@ -1209,8 +1457,12 @@ final class AppViewModel {
 
     @MainActor
     func trayBatchExportForWeb() {
-        guard !trayPhotoOrder.isEmpty else { return }
-        let ordered = trayPhotoOrder
+        let ordered = visibleTrayPhotoOrder
+        guard !ordered.isEmpty else { return }
+        guard canRunPhotoOnlyTrayActions else {
+            showAlert(message: "Web export is only available for photos.")
+            return
+        }
         let count = ordered.count
 
         guard let (destURL, template) = runExportPanel(
@@ -1246,20 +1498,21 @@ final class AppViewModel {
     }
 
     func trayBatchMove() {
-        guard !trayPhotos.isEmpty else { return }
+        let ordered = visibleTrayPhotoOrder
+        guard !ordered.isEmpty else { return }
         let panel = NSOpenPanel()
         panel.title = "Choose destination folder"
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
         panel.prompt = "Move"
-        panel.message = "Choose a folder to move \(trayPhotos.count) photos"
+        panel.message = "Choose a folder to move \(ordered.count) photos"
 
         guard panel.runModal() == .OK, let destURL = panel.url else { return }
         panel.orderOut(nil)
 
         var failures: [String] = []
-        for photo in trayPhotos {
+        for photo in ordered {
             let dest = destURL.appendingPathComponent(photo.filename)
             do {
                 try FileManager.default.moveItem(at: photo.url, to: dest)
@@ -1274,7 +1527,7 @@ final class AppViewModel {
         if !failures.isEmpty {
             showAlert(message: "Failed to move \(failures.count) file(s):\n\(failures.joined(separator: "\n"))")
         } else {
-            showSuccess("Moved \(trayPhotos.count) photo(s) to \(destURL.lastPathComponent)")
+            showSuccess("Moved \(ordered.count) photo(s) to \(destURL.lastPathComponent)")
         }
         if let url = folderURL {
             loadPhotos(from: url)
@@ -1285,7 +1538,7 @@ final class AppViewModel {
 
     func trayBatchToggleDotColor(_ color: Int) {
         let bit = DotColor.bitMask(for: color)
-        let updated = trayPhotos.map { photo -> PhotoItem in
+        let updated = visibleTrayPhotoOrder.map { photo -> PhotoItem in
             let hasIt = (photo.dotColor & bit) != 0
             var p = photo
             p.dotColor = hasIt ? (photo.dotColor & ~bit) : (photo.dotColor | bit)
@@ -1302,13 +1555,13 @@ final class AppViewModel {
     }
 
     func trayBatchClearDotColor() {
-        let updated = trayPhotos.map { (photo: PhotoItem) -> PhotoItem in
+        let updated = visibleTrayPhotoOrder.map { (photo: PhotoItem) -> PhotoItem in
             var p = photo
             p.dotColor = 0
             return p
         }
         batchUpdatePhotos(updated)
-        let urls = trayPhotos.map { $0.url.path }
+        let urls = visibleTrayPhotoOrder.map { $0.url.path }
         mutateDotColorsThenRefresh { db in
             _ = try db.execute(literal: "UPDATE photos SET dotColor = 0 WHERE url IN \(urls)")
         }
@@ -1328,26 +1581,33 @@ final class AppViewModel {
         panel.orderOut(nil)
     }
 
-    func refreshCurrentView() {
+    func refreshCurrentView(preserveSelection: Bool = true) {
         switch displayMode {
         case .library:
-            loadAllLibraryPhotos()
+            loadAllLibraryPhotos(preserveSelection: preserveSelection)
         case .dot:
-            loadDotColorPhotos()
+            loadDotColorPhotos(preserveSelection: preserveSelection)
         case .tray:
-            openTrayPhotos(pushHistory: false)
+            if preserveSelection {
+                let snapshot = makeSelectionSnapshot()
+                photos = Array(trayPhotoOrder)
+                rebuildFilteredPhotos()
+                restoreSelectionAfterReload(snapshot)
+            } else {
+                openTrayPhotos(pushHistory: false)
+            }
         case let .folder(folder):
             if let url = folder.url {
-                loadPhotos(from: url)
+                loadPhotos(from: url, preserveSelection: preserveSelection)
             }
         case let .year(year):
-            loadPhotosForYear(year)
+            loadPhotosForYear(year, preserveSelection: preserveSelection)
         case .map:
-            loadMapPhotos()
+            loadMapPhotos(preserveSelection: preserveSelection)
         case .people:
             refreshPersons()
         case let .person(id):
-            loadPersonPhotos(id)
+            loadPersonPhotos(id, preserveSelection: preserveSelection)
         }
     }
 
@@ -1392,7 +1652,7 @@ final class AppViewModel {
         guard let url = folder.url else { return }
         folderURL = url
         folderName = folder.name
-        loadPhotos(from: url)
+        loadPhotos(from: url, preserveSelection: false)
     }
 
     func addFolderToLibrary(_ url: URL) {
@@ -1419,7 +1679,7 @@ final class AppViewModel {
         displayMode = .library
         folderURL = nil
         folderName = "All Photos"
-        loadAllLibraryPhotos()
+        loadAllLibraryPhotos(preserveSelection: false)
     }
 
     func openDotColorPhotos(_ color: Int, pushHistory: Bool = true) {
@@ -1427,7 +1687,7 @@ final class AppViewModel {
         displayMode = .dot(color)
         folderURL = nil
         folderName = DotColor.name(for: color) ?? "Photos"
-        loadDotColorPhotos()
+        loadDotColorPhotos(preserveSelection: false)
     }
 
     func openTrayPhotos(pushHistory: Bool = true) {
@@ -1438,9 +1698,11 @@ final class AppViewModel {
         photos = Array(trayPhotoOrder)
         rebuildFilteredPhotos()
         clearTemporarySelection()
-        if let first = photos.first {
+        if let first = visiblePhotos.first {
             selectedPhoto = first
             temporarilySelectedPhotos.insert(first)
+        } else {
+            selectedPhoto = nil
         }
     }
 
@@ -1451,13 +1713,17 @@ final class AppViewModel {
         displayMode = .map
         folderURL = nil
         folderName = "Map"
-        loadMapPhotos()
+        loadMapPhotos(preserveSelection: false)
     }
 
     /// Loads only geotagged photos (latitude present), scoped to the library,
     /// for the MapKit annotations. Mirrors `loadDotColorPhotos`.
-    private func loadMapPhotos() {
-        clearTemporarySelection()
+    private func loadMapPhotos(preserveSelection: Bool = false) {
+        let snapshot = preserveSelection ? makeSelectionSnapshot() : nil
+        if !preserveSelection {
+            clearTemporarySelection()
+            selectedPhoto = nil
+        }
         loadGeneration += 1
         let generation = loadGeneration
 
@@ -1470,6 +1736,7 @@ final class AppViewModel {
 
             photos = filterLibraryRecords(geoRecords)
             rebuildFilteredPhotos()
+            restoreSelectionAfterReload(snapshot)
             await refreshPinnedPhotos()
             guard generation == loadGeneration else { return }
             isLoading = false
@@ -1701,14 +1968,18 @@ final class AppViewModel {
         displayMode = .person(id)
         folderURL = nil
         folderName = name ?? "Unnamed Person"
-        loadPersonPhotos(id)
+        loadPersonPhotos(id, preserveSelection: false)
     }
 
     /// Loads every library photo that contains a face assigned to this person.
     /// Reads the `faces` table by raw SQL (no record type needed); returns empty
     /// until the faces table exists (v9 migration / first scan).
-    private func loadPersonPhotos(_ id: String) {
-        clearTemporarySelection()
+    private func loadPersonPhotos(_ id: String, preserveSelection: Bool = false) {
+        let snapshot = preserveSelection ? makeSelectionSnapshot() : nil
+        if !preserveSelection {
+            clearTemporarySelection()
+            selectedPhoto = nil
+        }
         loadGeneration += 1
         let generation = loadGeneration
 
@@ -1724,6 +1995,7 @@ final class AppViewModel {
 
             photos = filterLibraryRecords(records)
             rebuildFilteredPhotos()
+            restoreSelectionAfterReload(snapshot)
             await refreshPinnedPhotos()
             guard generation == loadGeneration else { return }
             isLoading = false
@@ -1747,8 +2019,12 @@ final class AppViewModel {
         }
     }
 
-    private func loadPhotos(from url: URL) {
-        clearTemporarySelection()
+    private func loadPhotos(from url: URL, preserveSelection: Bool = false) {
+        let snapshot = preserveSelection ? makeSelectionSnapshot() : nil
+        if !preserveSelection {
+            clearTemporarySelection()
+            selectedPhoto = nil
+        }
         loadGeneration += 1
         let generation = loadGeneration
 
@@ -1760,11 +2036,13 @@ final class AppViewModel {
             if hasCache {
                 photos = cachedScoped.map { $0.toPhotoItem() }
                 rebuildFilteredPhotos()
+                restoreSelectionAfterReload(snapshot)
                 isLoading = false
             } else {
                 isLoading = true
                 photos = []
                 rebuildFilteredPhotos()
+                restoreSelectionAfterReload(snapshot)
             }
 
             await PhotoIndexer.shared.indexFolder(url, includeSubfolders: settings.includeSubfolders)
@@ -1774,6 +2052,7 @@ final class AppViewModel {
             guard generation == loadGeneration else { return }
             photos = scopeFolderRecords(freshRecords, folderPath: url.path).map { $0.toPhotoItem() }
             rebuildFilteredPhotos()
+            restoreSelectionAfterReload(snapshot)
 
             await refreshPinnedPhotos()
             guard generation == loadGeneration else { return }
@@ -1857,7 +2136,7 @@ final class AppViewModel {
         displayMode = .year(year)
         folderURL = nil
         folderName = String(year)
-        loadPhotosForYear(year)
+        loadPhotosForYear(year, preserveSelection: false)
     }
 
     private func filterYearRecords(_ records: [PhotoRecord], year: Int) -> [PhotoItem] {
@@ -1888,8 +2167,12 @@ final class AppViewModel {
             .map { $0.toPhotoItem() }
     }
 
-    private func loadPhotosForYear(_ year: Int) {
-        clearTemporarySelection()
+    private func loadPhotosForYear(_ year: Int, preserveSelection: Bool = false) {
+        let snapshot = preserveSelection ? makeSelectionSnapshot() : nil
+        if !preserveSelection {
+            clearTemporarySelection()
+            selectedPhoto = nil
+        }
         loadGeneration += 1
         let generation = loadGeneration
 
@@ -1901,11 +2184,13 @@ final class AppViewModel {
             if hasCache {
                 photos = cachedItems
                 rebuildFilteredPhotos()
+                restoreSelectionAfterReload(snapshot)
                 isLoading = false
             } else {
                 isLoading = true
                 photos = []
                 rebuildFilteredPhotos()
+                restoreSelectionAfterReload(snapshot)
             }
 
             await PhotoIndexer.shared.indexAllFolders(libraryFolders, excludedPaths: excludedLeafPaths, includeSubfolders: settings.includeSubfolders)
@@ -1915,6 +2200,7 @@ final class AppViewModel {
             guard generation == loadGeneration else { return }
             photos = filterYearRecords(freshRecords, year: year)
             rebuildFilteredPhotos()
+            restoreSelectionAfterReload(snapshot)
 
             await refreshPinnedPhotos()
             guard generation == loadGeneration else { return }
@@ -1928,10 +2214,18 @@ final class AppViewModel {
     /// dot-color row stable when browsing a single dot album — otherwise colors absent from
     /// the filtered subset would disappear from the sidebar.
     private func refreshUsedDotColors() {
+        let showVideos = settings.showVideos
         Task.detached { [weak self] in
             let bits = (try? await DatabaseManager.shared.dbQueue.read { db in
-                try Int.fetchAll(db, sql: "SELECT DISTINCT dotColor FROM photos WHERE dotColor != 0")
-                    .reduce(0, |)
+                if showVideos {
+                    return try Int.fetchAll(db, sql: "SELECT DISTINCT dotColor FROM photos WHERE dotColor != 0")
+                        .reduce(0, |)
+                }
+                return try Int.fetchAll(
+                    db,
+                    sql: "SELECT DISTINCT dotColor FROM photos WHERE dotColor != 0 AND mediaKind != ?",
+                    arguments: [MediaKind.video.rawValue]
+                ).reduce(0, |)
             }) ?? 0
             guard let self else { return }
             await MainActor.run { self.applyUsedDotColorBits(bits) }
@@ -1952,12 +2246,20 @@ final class AppViewModel {
     /// transaction, so the recompute always reflects the just-written change (no read-after-write
     /// race against a separate `writeToDBAsync` task).
     private func mutateDotColorsThenRefresh(_ mutation: @escaping @Sendable (Database) throws -> Void) {
+        let showVideos = settings.showVideos
         Task.detached { [weak self] in
             do {
                 let bits = try await DatabaseManager.shared.dbQueue.write { db -> Int in
                     try mutation(db)
-                    return try Int.fetchAll(db, sql: "SELECT DISTINCT dotColor FROM photos WHERE dotColor != 0")
-                        .reduce(0, |)
+                    if showVideos {
+                        return try Int.fetchAll(db, sql: "SELECT DISTINCT dotColor FROM photos WHERE dotColor != 0")
+                            .reduce(0, |)
+                    }
+                    return try Int.fetchAll(
+                        db,
+                        sql: "SELECT DISTINCT dotColor FROM photos WHERE dotColor != 0 AND mediaKind != ?",
+                        arguments: [MediaKind.video.rawValue]
+                    ).reduce(0, |)
                 }
                 guard let self else { return }
                 await MainActor.run { self.applyUsedDotColorBits(bits) }
@@ -1992,11 +2294,19 @@ final class AppViewModel {
         let grouping = sidebarGrouping
         let excluded = excludedLeafPaths
         let includeSubfolders = settings.includeSubfolders
+        let showVideos = settings.showVideos
         let watchedPaths = Set(libraryFolders.map(\.path))
 
         Task.detached(priority: .userInitiated) { [weak self] in
             var dbPaths: [String] = (try? await DatabaseManager.shared.dbQueue.read { db in
-                try String.fetchAll(db, sql: "SELECT DISTINCT folderPath FROM photos ORDER BY folderPath")
+                if showVideos {
+                    return try String.fetchAll(db, sql: "SELECT DISTINCT folderPath FROM photos ORDER BY folderPath")
+                }
+                return try String.fetchAll(
+                    db,
+                    sql: "SELECT DISTINCT folderPath FROM photos WHERE mediaKind != ? ORDER BY folderPath",
+                    arguments: [MediaKind.video.rawValue]
+                )
             }) ?? []
             // With subfolders off, hide subfolder entries left by earlier scans
             if !includeSubfolders {
@@ -2004,7 +2314,14 @@ final class AppViewModel {
             }
 
             let countRows: [Row] = (try? await DatabaseManager.shared.dbQueue.read { db in
-                try Row.fetchAll(db, sql: "SELECT folderPath, COUNT(*) AS cnt FROM photos GROUP BY folderPath")
+                if showVideos {
+                    return try Row.fetchAll(db, sql: "SELECT folderPath, COUNT(*) AS cnt FROM photos GROUP BY folderPath")
+                }
+                return try Row.fetchAll(
+                    db,
+                    sql: "SELECT folderPath, COUNT(*) AS cnt FROM photos WHERE mediaKind != ? GROUP BY folderPath",
+                    arguments: [MediaKind.video.rawValue]
+                )
             }) ?? []
             let counts: [String: Int] = countRows.reduce(into: [:]) { $0[$1["folderPath"]] = $1["cnt"] }
 
@@ -2036,13 +2353,29 @@ final class AppViewModel {
                 // Majority year per folder (ties → newer year) — must match
                 // the grid's libraryYearGroups rule exactly
                 let folderYears: [String: Int] = (try? await DatabaseManager.shared.dbQueue.read { db in
-                    let rows = try Row.fetchAll(db, sql: """
-                        SELECT folderPath,
-                               CAST(strftime('%Y', COALESCE(dateTakenOriginal, modificationDate)) AS INTEGER) AS year,
-                               COUNT(*) AS cnt
-                        FROM photos
-                        GROUP BY folderPath, year
-                    """)
+                    let rows: [Row]
+                    if showVideos {
+                        rows = try Row.fetchAll(db, sql: """
+                            SELECT folderPath,
+                                   CAST(strftime('%Y', COALESCE(dateTakenOriginal, modificationDate)) AS INTEGER) AS year,
+                                   COUNT(*) AS cnt
+                            FROM photos
+                            GROUP BY folderPath, year
+                        """)
+                    } else {
+                        rows = try Row.fetchAll(
+                            db,
+                            sql: """
+                                SELECT folderPath,
+                                       CAST(strftime('%Y', COALESCE(dateTakenOriginal, modificationDate)) AS INTEGER) AS year,
+                                       COUNT(*) AS cnt
+                                FROM photos
+                                WHERE mediaKind != ?
+                                GROUP BY folderPath, year
+                            """,
+                            arguments: [MediaKind.video.rawValue]
+                        )
+                    }
                     var best: [String: (year: Int, cnt: Int)] = [:]
                     for row in rows {
                         guard let path = row["folderPath"] as String?,
@@ -2167,8 +2500,12 @@ final class AppViewModel {
         trayPhotoOrder = existingOrder + newPins
     }
 
-    private func loadAllLibraryPhotos() {
-        clearTemporarySelection()
+    private func loadAllLibraryPhotos(preserveSelection: Bool = false) {
+        let snapshot = preserveSelection ? makeSelectionSnapshot() : nil
+        if !preserveSelection {
+            clearTemporarySelection()
+            selectedPhoto = nil
+        }
         loadGeneration += 1
         let generation = loadGeneration
 
@@ -2180,11 +2517,13 @@ final class AppViewModel {
             if hasCache {
                 photos = cachedItems
                 rebuildFilteredPhotos()
+                restoreSelectionAfterReload(snapshot)
                 isLoading = false
             } else {
                 isLoading = true
                 photos = []
                 rebuildFilteredPhotos()
+                restoreSelectionAfterReload(snapshot)
             }
 
             await PhotoIndexer.shared.indexAllFolders(libraryFolders, excludedPaths: excludedLeafPaths, includeSubfolders: settings.includeSubfolders)
@@ -2194,6 +2533,7 @@ final class AppViewModel {
             guard generation == loadGeneration else { return }
             photos = filterLibraryRecords(freshRecords)
             rebuildFilteredPhotos()
+            restoreSelectionAfterReload(snapshot)
 
             await refreshPinnedPhotos()
             guard generation == loadGeneration else { return }
@@ -2202,10 +2542,14 @@ final class AppViewModel {
         }
     }
 
-    private func loadDotColorPhotos() {
+    private func loadDotColorPhotos(preserveSelection: Bool = false) {
         guard case let .dot(color) = displayMode else { return }
         let bit = DotColor.bitMask(for: color)
-        clearTemporarySelection()
+        let snapshot = preserveSelection ? makeSelectionSnapshot() : nil
+        if !preserveSelection {
+            clearTemporarySelection()
+            selectedPhoto = nil
+        }
 
         Task { @MainActor in
             isLoading = true
@@ -2215,6 +2559,7 @@ final class AppViewModel {
 
             photos = filterLibraryRecords(allRecords)
             rebuildFilteredPhotos()
+            restoreSelectionAfterReload(snapshot)
 
             await refreshPinnedPhotos()
             refreshSidebarGroups()
@@ -2493,6 +2838,10 @@ final class AppViewModel {
     }
 
     func toggleEditMode() {
+        if let photo = selectedPhoto, photo.isVideo {
+            showAlert(message: "Videos can't be edited here. Open them in Quick Look instead.")
+            return
+        }
         if !isEditing, let photo = selectedPhoto, photo.isRaw {
             showAlert(message: "RAW files can't be edited.\n\nPicshurs can view \(photo.url.pathExtension.uppercased()) files, but editing is only supported for JPEG, PNG, HEIC, and TIFF. Convert the file first if you need to edit it.")
             return
@@ -2535,6 +2884,13 @@ final class AppViewModel {
             histogramPhotoID = nil
             return
         }
+        guard photo.isImage else {
+            editPayload = EditPayload()
+            previewImage = nil
+            histogramData = nil
+            histogramPhotoID = nil
+            return
+        }
         if let stored = EditStore.load(for: photo.url) {
             editPayload = stored
             if !isEditing {
@@ -2548,6 +2904,11 @@ final class AppViewModel {
     }
 
     private func refreshHistogram(for photo: PhotoItem) {
+        guard photo.isImage else {
+            histogramData = nil
+            histogramPhotoID = photo.id
+            return
+        }
         guard histogramPhotoID != photo.id else { return }
         histogramPhotoID = photo.id
         let photoID = photo.id
@@ -2563,6 +2924,11 @@ final class AppViewModel {
     }
 
     func schedulePreviewRender() {
+        guard selectedPhoto?.isImage != false else {
+            previewImage = nil
+            renderTask?.cancel()
+            return
+        }
         renderTask?.cancel()
         renderTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 80_000_000)
@@ -2572,7 +2938,10 @@ final class AppViewModel {
     }
 
     private func renderPreview(skipCrop: Bool = false) async {
-        guard let photo = selectedPhoto else { return }
+        guard let photo = selectedPhoto, photo.isImage else {
+            previewImage = nil
+            return
+        }
         let photoID = photo.id
         let photoURL = photo.url
         let payload = editPayload
@@ -2591,6 +2960,10 @@ final class AppViewModel {
     private static let rawExtensions = PhotoItem.rawExtensions
 
     func saveEditsToOriginal(photo: PhotoItem, payload: EditPayload) {
+        guard photo.isImage else {
+            showAlert(message: "Save to Original is only available for photos.")
+            return
+        }
         if isCropping { applyCrop() }
         if isStraightening { applyStraighten() }
         let finalPayload = editPayload
@@ -2707,6 +3080,10 @@ final class AppViewModel {
 
     /// Exports an edited copy to a user-chosen location.
     func exportEditedCopy(photo: PhotoItem, payload: EditPayload) {
+        guard photo.isImage else {
+            showAlert(message: "Export Edited Copy is only available for photos.")
+            return
+        }
         // Validate file URL is valid and accessible
         guard photo.url.isFileURL else {
             showAlert(message: "Invalid file path: \(photo.url.absoluteString)")

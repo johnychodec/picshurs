@@ -3,6 +3,7 @@ import SwiftUI
 struct GeneralSettingsView: View {
     @Binding var confirmBeforeTrash: Bool
     @Binding var showFilenameLabels: Bool
+    @Binding var showVideos: Bool
     @Binding var preserveAspectRatio: Bool
     @Binding var defaultThumbnailSize: Double
     @Binding var trayThumbnailSize: Double
@@ -33,6 +34,7 @@ struct GeneralSettingsView: View {
                 Toggle("Confirm before moving to Trash", isOn: $confirmBeforeTrash)
                 Toggle("Preserve thumbnail aspect ratio", isOn: $preserveAspectRatio)
                 Toggle("Show filename labels on hover", isOn: $showFilenameLabels)
+                Toggle("Show videos", isOn: $showVideos)
             }
 
             Section {

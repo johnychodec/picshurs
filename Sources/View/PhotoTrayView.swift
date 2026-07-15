@@ -25,14 +25,14 @@ struct PhotoTrayView: View {
                     columns: [GridItem(.adaptive(minimum: settings.trayThumbnailSize, maximum: settings.trayThumbnailSize), spacing: rowSpacing)],
                     spacing: rowSpacing
                 ) {
-                    if viewModel.trayPhotos.isEmpty {
-                        Text("Select photos then press P to pin · Right-click for more options")
+                    if viewModel.visibleTrayPhotoOrder.isEmpty {
+                        Text("Select items then press P to pin · Right-click for more options")
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                             .frame(maxWidth: .infinity, alignment: .center)
                             .padding(.vertical, 12)
                     } else {
-                        ForEach(viewModel.trayPhotoOrder) { photo in
+                        ForEach(viewModel.visibleTrayPhotoOrder) { photo in
                             trayCell(photo: photo)
                         }
                     }
@@ -54,7 +54,7 @@ struct PhotoTrayView: View {
             )
             // Same actions, order, and icons as the button row below the tray.
             .contextMenu {
-                if !viewModel.trayPhotos.isEmpty {
+                if !viewModel.visibleTrayPhotoOrder.isEmpty {
                     Button { viewModel.clearAllFromTrayWithConfirmation() } label: {
                         Label("Clear Tray", systemImage: "pin.slash")
                     }
@@ -65,9 +65,11 @@ struct PhotoTrayView: View {
                     Button { viewModel.trayBatchExportNoMetadata() } label: {
                         Label("Export without metadata (tray order)", systemImage: "square.and.arrow.up.trianglebadge.exclamationmark")
                     }
+                    .disabled(!viewModel.canRunPhotoOnlyTrayActions)
                     Button { viewModel.trayBatchExportForWeb() } label: {
                         Label("Export for web (tray order)", systemImage: "globe")
                     }
+                    .disabled(!viewModel.canRunPhotoOnlyTrayActions)
                     Divider()
                     Button { viewModel.trayBatchDuplicate() } label: {
                         Label("Duplicate", systemImage: "doc.on.doc")
@@ -104,7 +106,7 @@ struct PhotoTrayView: View {
                 return true
             }
 
-            if !viewModel.trayPhotos.isEmpty {
+            if !viewModel.visibleTrayPhotoOrder.isEmpty {
                 Divider()
                     .padding(.horizontal, 8)
 
@@ -169,7 +171,7 @@ struct PhotoTrayView: View {
     }
 
     private var trayMaxHeight: CGFloat {
-        let actionsHeight: CGFloat = viewModel.trayPhotos.isEmpty ? 0 : 44
+        let actionsHeight: CGFloat = viewModel.visibleTrayPhotoOrder.isEmpty ? 0 : 44
         return gridHeight + actionsHeight
     }
 
@@ -182,7 +184,7 @@ struct PhotoTrayView: View {
         let isFocus = viewModel.selectedPhoto == photo
 
         return ZStack(alignment: .topTrailing) {
-            ThumbnailImage(url: photo.url, modificationDate: photo.modificationDate)
+            ThumbnailImage(url: photo.url, modificationDate: photo.modificationDate, mediaKind: photo.mediaKind)
                 .frame(width: size, height: size)
                 .clipped()
                 .rotationEffect(.degrees(Double(viewModel.editRotation(for: photo.url))))
@@ -217,6 +219,12 @@ struct PhotoTrayView: View {
                     .offset(x: -2, y: 2)
             }
 
+            if photo.isVideo {
+                VideoBadge(size: max(8, size * 0.16))
+                    .padding(4)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+            }
+
             if size >= 40 {
                 Button {
                     if isTemp {
@@ -226,6 +234,7 @@ struct PhotoTrayView: View {
                     }
                     if viewModel.selectedPhoto == photo {
                         viewModel.selectedPhoto = viewModel.temporarilySelectedPhotos.first ?? viewModel.pinnedPhotos.first
+                        viewModel.clearExternalVideoReturnStateIfSelectionChanged()
                     }
                 } label: {
                     Image(systemName: "xmark.circle.fill")
@@ -272,6 +281,11 @@ struct PhotoTrayView: View {
                     viewModel.pinPhoto(photo)
                 }
             }
+            if photo.isVideo {
+                Button("Open Video") {
+                    viewModel.openVideoInDefaultPlayer(photo)
+                }
+            }
             Button("Show in Finder") {
                 NSWorkspace.shared.selectFile(photo.url.path, inFileViewerRootedAtPath: "")
             }
@@ -288,7 +302,7 @@ struct PhotoTrayView: View {
                 .font(.caption)
                 .fontWeight(.semibold)
                 .foregroundStyle(.secondary)
-            Text("\(viewModel.trayPhotos.count)")
+            Text("\(viewModel.visibleTrayPhotoOrder.count)")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
@@ -310,10 +324,12 @@ struct PhotoTrayView: View {
             trayIconButton(icon: "square.and.arrow.up.trianglebadge.exclamationmark", help: "Export without metadata (tray order)") {
                 viewModel.trayBatchExportNoMetadata()
             }
+            .disabled(!viewModel.canRunPhotoOnlyTrayActions)
 
             trayIconButton(icon: "globe", help: "Export for web (tray order)") {
                 viewModel.trayBatchExportForWeb()
             }
+            .disabled(!viewModel.canRunPhotoOnlyTrayActions)
 
             trayIconButton(icon: "doc.on.doc", help: "Duplicate") {
                 viewModel.trayBatchDuplicate()

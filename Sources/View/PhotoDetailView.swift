@@ -13,6 +13,7 @@ struct PhotoDetailView: View {
     @State private var fallbackPhotoID: String?
     private let minZoom: CGFloat = 0.1
     private let maxZoom: CGFloat = 8.0
+    private let zoomStep: CGFloat = 1.25
     private let stripHeight: CGFloat = 90
 
     var body: some View {
@@ -54,6 +55,9 @@ struct PhotoDetailView: View {
             if press.characters == "i" { showInfo.toggle(); return .handled }
             return .ignored
         }
+        .onChange(of: viewModel.viewerZoomCommandID) { _, _ in
+            handleViewerZoomCommand(viewModel.viewerZoomCommand)
+        }
         .onChange(of: viewModel.selectedPhoto?.id) { _, _ in
             resetZoom()
             seedFallbackFromThumbnail()
@@ -89,7 +93,9 @@ struct PhotoDetailView: View {
     @ViewBuilder
     private var displayedImage: some View {
         if let photo = viewModel.selectedPhoto {
-            if let preview = viewModel.previewImage {
+            if photo.isVideo {
+                videoPosterView(photo: photo)
+            } else if let preview = viewModel.previewImage {
                 let image = Image(nsImage: preview)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
@@ -148,7 +154,55 @@ struct PhotoDetailView: View {
         }
     }
 
+    @ViewBuilder
+    private func videoPosterView(photo: PhotoItem) -> some View {
+        if let fb = fallbackImage, fallbackPhotoID == photo.id {
+            Image(nsImage: fb)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .scaleEffect(zoomScale)
+                .offset(offset)
+                .overlay {
+                    Image(systemName: "play.circle.fill")
+                        .font(.system(size: 72, weight: .semibold))
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, .black.opacity(0.45))
+                        .shadow(color: .black.opacity(0.45), radius: 10, y: 3)
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { viewModel.openVideoInDefaultPlayer(photo) }
+                .onTapGesture(count: 2) { viewModel.openVideoInDefaultPlayer(photo) }
+                .contextMenu {
+                    contextMenu(for: photo)
+                }
+        } else {
+            ProgressView()
+                .controlSize(.large)
+                .foregroundStyle(.white)
+                .frame(width: 32, height: 32)
+        }
+    }
+
     private func loadFallbackImage(for photo: PhotoItem) async {
+        if photo.isVideo {
+            let url = photo.url
+            let photoID = photo.id
+            let image = await ThumbnailService.shared.thumbnail(
+                for: url,
+                modificationDate: photo.modificationDate,
+                tier: ThumbnailService.detailTier,
+                mediaKind: .video
+            )
+            guard !Task.isCancelled, viewModel.selectedPhoto?.id == photoID else { return }
+            if let image {
+                fallbackImage = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+                fallbackPhotoID = photoID
+            } else {
+                fallbackImage = nil
+                fallbackPhotoID = nil
+            }
+            return
+        }
         let url = photo.url
         let photoID = photo.id
         let screenSize = NSScreen.main?.visibleFrame.size ?? CGSize(width: 1200, height: 800)
@@ -216,6 +270,26 @@ struct PhotoDetailView: View {
             Spacer()
 
             HStack(spacing: 4) {
+                if !viewModel.isEditing {
+                    toolbarButton(image: "minus.magnifyingglass", color: .secondary) {
+                        zoomOut()
+                    }
+                    .disabled(!canZoomOut)
+                    .help("Zoom out")
+
+                    toolbarButton(image: "plus.magnifyingglass", color: .secondary) {
+                        zoomIn()
+                    }
+                    .disabled(!canZoomIn)
+                    .help("Zoom in")
+
+                    toolbarButton(image: "arrow.up.left.and.down.right.magnifyingglass", color: .secondary) {
+                        resetZoom()
+                    }
+                    .disabled(!canResetZoom)
+                    .help("Reset zoom")
+                }
+
                 if let photo = viewModel.selectedPhoto {
                     toolbarButton(
                         image: photo.dotColor > 0 ? "circle.fill" : "circle",
@@ -237,9 +311,10 @@ struct PhotoDetailView: View {
                 toolbarButton(
                     image: viewModel.isEditing ? "pencil.circle.fill" : "pencil.circle",
                     color: viewModel.isEditing ? .accentColor
-                        : (viewModel.selectedPhoto?.isRaw == true ? Color.secondary.opacity(0.4) : .secondary)
+                        : ((viewModel.selectedPhoto?.isRaw == true || viewModel.selectedPhoto?.isVideo == true) ? Color.secondary.opacity(0.4) : .secondary)
                 ) { withAnimation(.easeInOut(duration: 0.25)) { viewModel.toggleEditMode() } }
-                .help(viewModel.selectedPhoto?.isRaw == true ? "RAW files can't be edited" : "Edit photo (E)")
+                .disabled(viewModel.selectedPhoto?.isVideo == true)
+                .help(editButtonHelp)
 
                 toolbarButton(image: "info.circle", color: .secondary) { showInfo.toggle() }
 
@@ -260,6 +335,12 @@ struct PhotoDetailView: View {
         .buttonStyle(.plain)
     }
 
+    private var editButtonHelp: String {
+        if viewModel.selectedPhoto?.isVideo == true { return "Videos can't be edited" }
+        if viewModel.selectedPhoto?.isRaw == true { return "RAW files can't be edited" }
+        return "Edit photo (E)"
+    }
+
     // MARK: - Thumbnail Strip
 
     private var thumbnailStrip: some View {
@@ -269,7 +350,9 @@ struct PhotoDetailView: View {
                     ForEach(viewModel.filteredPhotos) { photo in
                         thumbnailCell(photo: photo)
                             .id(photo.id)
-                            .onTapGesture { viewModel.selectSingle(photo) }
+                            .onTapGesture {
+                                viewModel.selectSingle(photo)
+                            }
                     }
                 }
             }
@@ -297,7 +380,7 @@ struct PhotoDetailView: View {
         let isTemp = viewModel.temporarilySelectedPhotos.contains(photo)
         let isPinned = viewModel.isPinned(photo)
 
-        return ThumbnailImage(url: photo.url, modificationDate: photo.modificationDate)
+        return ThumbnailImage(url: photo.url, modificationDate: photo.modificationDate, mediaKind: photo.mediaKind)
                 .frame(width: stripHeight, height: stripHeight)
                 .clipped()
                 .rotationEffect(.degrees(Double(viewModel.editRotation(for: photo.url))))
@@ -321,6 +404,12 @@ struct PhotoDetailView: View {
                             .foregroundStyle(.orange)
                             .shadow(color: .black.opacity(0.4), radius: 1, y: 1)
                             .padding(3)
+                    }
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    if photo.isVideo {
+                        VideoBadge(size: 9)
+                            .padding(4)
                     }
                 }
                 .opacity(isFocus ? 1.0 : (isInTray ? 0.75 : 0.5))
@@ -400,6 +489,12 @@ struct PhotoDetailView: View {
                 Divider()
             }
 
+            if photo.isVideo {
+                Button("Open Video") {
+                    viewModel.openVideoInDefaultPlayer(photo)
+                }
+            }
+
             Button("Show in Finder") {
                 NSWorkspace.shared.selectFile(photo.url.path, inFileViewerRootedAtPath: "")
             }
@@ -456,12 +551,51 @@ struct PhotoDetailView: View {
             }
     }
 
+    private var canZoomIn: Bool {
+        zoomScale < maxZoom
+    }
+
+    private var canZoomOut: Bool {
+        zoomScale > minZoom
+    }
+
+    private var canResetZoom: Bool {
+        zoomScale != 1.0 || offset != .zero || lastOffset != .zero
+    }
+
+    private func zoomIn() {
+        setZoom(zoomScale * zoomStep)
+    }
+
+    private func zoomOut() {
+        setZoom(zoomScale / zoomStep)
+    }
+
+    private func setZoom(_ scale: CGFloat) {
+        let clamped = min(max(scale, minZoom), maxZoom)
+        withAnimation(.easeInOut(duration: 0.18)) {
+            zoomScale = clamped
+            lastZoomScale = clamped
+            if clamped <= 1.0 {
+                offset = .zero
+                lastOffset = .zero
+            }
+        }
+    }
+
     private func resetZoom() {
-        withAnimation(.spring()) {
-            zoomScale = 1.0
-            lastZoomScale = 1.0
-            offset = .zero
-            lastOffset = .zero
+        setZoom(1.0)
+    }
+
+    private func handleViewerZoomCommand(_ command: AppViewModel.ViewerZoomCommand?) {
+        guard let command else { return }
+        switch command {
+        case .in:
+            zoomIn()
+        case .out:
+            zoomOut()
+        case .reset:
+            resetZoom()
         }
     }
 

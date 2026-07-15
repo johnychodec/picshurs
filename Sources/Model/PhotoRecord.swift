@@ -8,6 +8,7 @@ struct PhotoRecord: Codable, Identifiable {
     var fileSize: Int64
     var modificationDate: Date
     var folderPath: String
+    var mediaKind: String
     var dotColor: Int
     var isPinned: Bool
     var isStarred: Bool
@@ -35,7 +36,7 @@ extension PhotoRecord: FetchableRecord, MutablePersistableRecord {
 extension PhotoRecord {
     enum Columns: String, ColumnExpression {
         case id, url, filename, fileSize, modificationDate, folderPath
-        case dotColor, isPinned, isStarred, trayOrder, width, height
+        case mediaKind, dotColor, isPinned, isStarred, trayOrder, width, height
         case cameraModel, lensModel, focalLength, aperture, shutterSpeed
         case iso, dateTakenOriginal, dayKey, latitude, longitude
     }
@@ -45,11 +46,13 @@ extension PhotoRecord {
 
 extension PhotoRecord {
     func toPhotoItem() -> PhotoItem {
+        let kind = MediaKind(rawValue: mediaKind) ?? .image
         var item = PhotoItem(
             url: URL(fileURLWithPath: url),
             fileSize: fileSize,
             modificationDate: modificationDate,
             folderPath: folderPath,
+            mediaKind: kind,
             width: width.map(Int.init),
             height: height.map(Int.init),
             cameraModel: cameraModel,

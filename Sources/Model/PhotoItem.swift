@@ -1,6 +1,11 @@
 import Foundation
 import CoreLocation
 
+enum MediaKind: String, Codable {
+    case image
+    case video
+}
+
 struct PhotoItem: Identifiable, Hashable {
     var id: String { url.path }
     let url: URL
@@ -8,6 +13,7 @@ struct PhotoItem: Identifiable, Hashable {
     let fileSize: Int64
     let modificationDate: Date
     let folderPath: String
+    var mediaKind: MediaKind = .image
     var dotColor: Int = 0
     var isPinned: Bool = false
     var isStarred: Bool = false
@@ -24,12 +30,13 @@ struct PhotoItem: Identifiable, Hashable {
     var latitude: Double?
     var longitude: Double?
 
-    init(url: URL, fileSize: Int64, modificationDate: Date, folderPath: String = "", width: Int? = nil, height: Int? = nil, cameraModel: String? = nil, lensModel: String? = nil, focalLength: Double? = nil, aperture: Double? = nil, shutterSpeed: String? = nil, iso: Int? = nil, dateTakenOriginal: Date? = nil, latitude: Double? = nil, longitude: Double? = nil) {
+    init(url: URL, fileSize: Int64, modificationDate: Date, folderPath: String = "", mediaKind: MediaKind = .image, width: Int? = nil, height: Int? = nil, cameraModel: String? = nil, lensModel: String? = nil, focalLength: Double? = nil, aperture: Double? = nil, shutterSpeed: String? = nil, iso: Int? = nil, dateTakenOriginal: Date? = nil, latitude: Double? = nil, longitude: Double? = nil) {
         self.url = url
         self.filename = url.lastPathComponent
         self.fileSize = fileSize
         self.modificationDate = modificationDate
         self.folderPath = folderPath
+        self.mediaKind = mediaKind
         self.width = width
         self.height = height
         self.cameraModel = cameraModel
@@ -53,8 +60,25 @@ struct PhotoItem: Identifiable, Hashable {
         "cr2", "nef", "arw", "dng", "raw", "orf", "pef", "raf", "x3f", "sr2", "rw2"
     ]
 
+    static let imageExtensions: Set<String> = [
+        "jpg", "jpeg", "png", "heic", "heif", "tiff", "tif",
+        "bmp", "gif", "webp"
+    ]
+
+    static let videoExtensions: Set<String> = [
+        "mov", "mp4", "m4v", "avi", "mts", "m2ts", "3gp"
+    ]
+
     var isRaw: Bool {
         Self.rawExtensions.contains(url.pathExtension.lowercased())
+    }
+
+    var isVideo: Bool {
+        mediaKind == .video
+    }
+
+    var isImage: Bool {
+        mediaKind == .image
     }
 
     /// The photo's real date: EXIF capture date when present, file

@@ -4,6 +4,7 @@ import AppKit
 struct ContentView: View {
     @Environment(AppViewModel.self) private var viewModel
     @Environment(AppSettings.self) private var settings
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var keyMonitor: Any?
     @State private var scrollMonitor: Any?
@@ -83,8 +84,9 @@ struct ContentView: View {
                         PeopleView()
                     } else {
                         PhotoGridView(onSelect: { photo in
-                            viewModel.selectSingle(photo)
-                            withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) { viewModel.isViewingPhoto = true }
+                            withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
+                                viewModel.openMedia(photo)
+                            }
                         })
                         .overlay(alignment: .bottom) {
                             if showGridInfo, let photo = viewModel.selectedPhoto {
@@ -132,6 +134,11 @@ struct ContentView: View {
                 }
             }
         }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                viewModel.handleReturnFromExternalVideoPlayer()
+            }
+        }
         .onAppear {
             guard scrollMonitor == nil else { return }
             if keyMonitor != nil { return }
@@ -146,6 +153,17 @@ struct ContentView: View {
                 let flags = event.modifierFlags
                 let isCmd = flags.contains(.command)
                 let isShift = flags.contains(.shift)
+                let isOpt = flags.contains(.option)
+
+                if isCmd,
+                   viewModel.isViewingPhoto,
+                   viewModel.selectedPhoto != nil,
+                   !viewModel.isEditing,
+                   !isEditingText,
+                   let zoomCommand = viewerZoomCommand(for: event) {
+                    viewModel.sendViewerZoomCommand(zoomCommand)
+                    return nil
+                }
 
                 // Handle ⌘⇧A — Deselect all (must precede ⌘A)
                 if isCmd, isShift, event.keyCode == 0 { // 'a'
@@ -180,6 +198,9 @@ struct ContentView: View {
                         withAnimation(.easeInOut(duration: 0.25)) { viewModel.toggleEditMode() }
                         return nil
                     } else if viewModel.isViewingPhoto {
+                        if viewModel.shouldSuppressGalleryCloseShortcut() {
+                            return nil
+                        }
                         withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
                             viewModel.closeViewer()
                         }
@@ -203,12 +224,15 @@ struct ContentView: View {
                 // Spacebar — open/close gallery view (Photos.app convention)
                 if event.keyCode == 49, !isCmd, !isEditingText, !viewModel.isEditing {
                     if viewModel.isViewingPhoto {
+                        if viewModel.shouldSuppressGalleryCloseShortcut() {
+                            return nil
+                        }
                         withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
                             viewModel.closeViewer()
                         }
                     } else if viewModel.selectedPhoto != nil {
                         withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
-                            viewModel.isViewingPhoto = true
+                            viewModel.openSelectedPhoto()
                         }
                     }
                     return nil
@@ -216,8 +240,11 @@ struct ContentView: View {
 
                 // ⌘Y — Quick Look (Finder convention)
                 if event.keyCode == 16, isCmd, !isShift, !isEditingText { // 'y'
-                    let urls = viewModel.filteredPhotos.map { $0.url }
-                    viewModel.quickLookController.show(urls: urls)
+                    let ordered = viewModel.selectedPhotosInVisibleOrder
+                    let urls = ordered.isEmpty
+                        ? viewModel.visiblePhotos.map(\.url)
+                        : ordered.map(\.url)
+                    viewModel.quickLookController.show(urls: urls, selectedURL: viewModel.selectedPhoto?.url)
                     return nil
                 }
 
@@ -248,7 +275,6 @@ struct ContentView: View {
                 }
 
                 // Handle ⌥1-8 — Toggle dot color on selected (guard text editing)
-                let isOpt = flags.contains(.option)
                 let dotKeyCodes: [UInt16: Int] = [18: 1, 19: 2, 20: 3, 21: 4, 23: 5, 22: 6, 26: 7, 28: 8]
                 if !isCmd, isOpt, let color = dotKeyCodes[event.keyCode], !isEditingText {
                     if !viewModel.temporarilySelectedPhotos.isEmpty {
@@ -299,6 +325,7 @@ struct ContentView: View {
 
                 // Handle E — Toggle edit mode (viewer only, guard text editing)
                 if event.keyCode == 14, !isCmd, !isEditingText, viewModel.isViewingPhoto, viewModel.selectedPhoto != nil { // 'e'
+                    guard viewModel.selectedPhoto?.isVideo != true else { return nil }
                     withAnimation(.easeInOut(duration: 0.25)) { viewModel.toggleEditMode() }
                     return nil
                 }
@@ -376,6 +403,31 @@ struct ContentView: View {
             if let monitor = scrollMonitor {
                 NSEvent.removeMonitor(monitor)
                 scrollMonitor = nil
+            }
+        }
+    }
+
+    private func viewerZoomCommand(for event: NSEvent) -> AppViewModel.ViewerZoomCommand? {
+        let chars = event.charactersIgnoringModifiers ?? event.characters ?? ""
+        switch chars {
+        case "+", "=":
+            return .in
+        case "-":
+            return .out
+        case "0":
+            return .reset
+        default:
+            switch event.keyCode {
+            case 24:
+                return .in
+            case 27:
+                return .out
+            case 29:
+                return .reset
+            case 69:
+                return .in
+            default:
+                return nil
             }
         }
     }

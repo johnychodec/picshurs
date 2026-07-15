@@ -3,11 +3,20 @@ import Quartz
 
 final class QuickLookController: NSObject, QLPreviewPanelDataSource, QLPreviewPanelDelegate {
     var photos: [URL] = []
+    private var selectedIndex = 0
 
-    func show(urls: [URL]) {
+    func show(urls: [URL], selectedURL: URL? = nil) {
         photos = urls
         guard !photos.isEmpty else { return }
-        QLPreviewPanel.shared().makeKeyAndOrderFront(nil)
+        if let selectedURL,
+           let index = photos.firstIndex(of: selectedURL) {
+            selectedIndex = index
+        } else {
+            selectedIndex = 0
+        }
+        guard let panel = QLPreviewPanel.shared() else { return }
+        panel.makeKeyAndOrderFront(nil)
+        panel.currentPreviewItemIndex = selectedIndex
     }
 
     func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {

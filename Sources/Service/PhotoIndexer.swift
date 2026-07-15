@@ -75,6 +75,7 @@ actor PhotoIndexer {
                             updated.fileSize = file.fileSize
                             updated.modificationDate = file.modificationDate
                             updated.folderPath = file.folderPath
+                            updated.mediaKind = file.mediaKind.rawValue
                             updated.width = file.width.map(Double.init)
                             updated.height = file.height.map(Double.init)
                             updated.cameraModel = file.cameraModel
@@ -98,6 +99,7 @@ actor PhotoIndexer {
                             fileSize: file.fileSize,
                             modificationDate: file.modificationDate,
                             folderPath: file.folderPath,
+                            mediaKind: file.mediaKind.rawValue,
                             dotColor: 0,
                             isPinned: false,
                             isStarred: false,

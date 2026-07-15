@@ -14,10 +14,9 @@ struct ExifInfo {
 }
 
 struct FolderScanner {
-    private static let imageExtensions: Set<String> = Set([
-        "jpg", "jpeg", "png", "heic", "heif", "tiff", "tif",
-        "bmp", "gif", "webp"
-    ]).union(PhotoItem.rawExtensions)
+    private static let imageExtensions = PhotoItem.imageExtensions.union(PhotoItem.rawExtensions)
+    private static let videoExtensions = PhotoItem.videoExtensions
+    private static let supportedExtensions = imageExtensions.union(videoExtensions)
 
     /// Cheap stat-only pass — no file opens, no EXIF. `needsMetadata(path:size:date:)`
     /// decides per-file whether to pay for the ImageIO read (new or changed files only).
@@ -47,19 +46,23 @@ struct FolderScanner {
             else { continue }
 
             let ext = fileURL.pathExtension.lowercased()
-            guard imageExtensions.contains(ext) else { continue }
+            guard supportedExtensions.contains(ext) else { continue }
 
             let fileSize = Int64(resourceValues.fileSize ?? 0)
             let modDate = resourceValues.contentModificationDate ?? Date()
             let folderPath = fileURL.deletingLastPathComponent().path
+            let mediaKind: MediaKind = videoExtensions.contains(ext) ? .video : .image
 
             if needsMetadata(fileURL.path, fileSize, modDate) {
-                let (width, height, exif) = imageProperties(for: fileURL)
+                let (width, height, exif) = mediaKind == .image
+                    ? imageProperties(for: fileURL)
+                    : (nil, nil, nil)
                 items.append(PhotoItem(
                     url: fileURL,
                     fileSize: fileSize,
                     modificationDate: modDate,
                     folderPath: folderPath,
+                    mediaKind: mediaKind,
                     width: width,
                     height: height,
                     cameraModel: exif?.cameraModel,
@@ -77,7 +80,8 @@ struct FolderScanner {
                     url: fileURL,
                     fileSize: fileSize,
                     modificationDate: modDate,
-                    folderPath: folderPath
+                    folderPath: folderPath,
+                    mediaKind: mediaKind
                 ))
             }
         }

@@ -1,8 +1,8 @@
 # Picshurs
 
 <p align="center">
-  <strong>A local-first photo organizer for macOS.</strong><br>
-  Browse, tag, edit, and export your photos — no cloud accounts, no subscriptions, no hidden databases.<br>
+  <strong>A local-first photo and video organizer for macOS.</strong><br>
+  Browse, tag, edit photos, and export your media — no cloud accounts, no subscriptions, no hidden databases.<br>
   Your files stay exactly where you put them.
 </p>
 
@@ -20,9 +20,9 @@
 
 ## Why Picshurs?
 
-- **No cloud, no lock-in.** Your photos live on your disk. Picshurs reads them in place and never moves, copies, or uploads anything unless you ask.
-- **Non-destructive editing.** Crop, straighten, adjust brightness/contrast/saturation, apply filters — originals are never modified. Edits are saved as tiny sidecar files and can be undone anytime.
-- **Fast at scale.** Designed for 10,000+ photo libraries. The grid renders from a local SQLite index in milliseconds; filesystem scanning happens in the background.
+- **No cloud, no lock-in.** Your photos and videos live on your disk. Picshurs reads them in place and never moves, copies, or uploads anything unless you ask.
+- **Non-destructive photo editing.** Crop, straighten, adjust brightness/contrast/saturation, apply filters — originals are never modified. Edits are saved as tiny sidecar files and can be undone anytime.
+- **Fast at scale.** Designed for 10,000+ item libraries. The grid renders from a local SQLite index in milliseconds; filesystem scanning happens in the background.
 - **Keyboard-driven.** Nearly every action has a shortcut. 
 
 ---
@@ -49,12 +49,14 @@ Picshurs is a spiritual successor to Google's Picasa, carrying forward its philo
 - Add any folder to your library — including external drives and NAS mounts
 - Automatic indexing with filesystem monitoring (new/changed files detected automatically)
 - 8-color dot tagging system (virtual albums without moving files)
-- Photo tray: pin, reorder, and batch-export a curated selection
+- Media tray: pin, reorder, and batch-export a curated selection
 - Marquee drag selection across all grid modes
 - Sort by name, date, or file size
 - Full-text search by filename, folder name, or **text recognized inside photos** (OCR)
-- Share photos via the standard macOS share sheet
-- Quick Look integration (Spacebar)
+- Videos appear beside photos with poster thumbnails and play badges
+- Show or hide videos from **Settings → General → Browsing** without rescanning
+- Share files via the standard macOS share sheet
+- Quick Look integration (`Cmd+Y`)
 
 ### Discover
 - **People** *(experimental, off by default)* — on-device face detection groups photos by who's in them. Name, merge, and hide people; everything runs locally with Apple's Vision framework.
@@ -62,6 +64,7 @@ Picshurs is a spiritual successor to Google's Picasa, carrying forward its philo
 - **Text in photos** — opt-in OCR indexes the text inside your images so search can find signs, screenshots, and documents.
 
 ### Edit
+- Photo editing only; videos and RAW files remain view-only
 - Brightness, contrast, exposure, saturation, shadows, sharpness sliders
 - Color temperature and tint
 - Auto Contrast, Auto Color, and "I'm Feeling Lucky" one-click enhance
@@ -76,13 +79,13 @@ Picshurs is a spiritual successor to Google's Picasa, carrying forward its philo
 - Batch export with customizable filename templates (`{n}`, `{name}`, `{date}`, `{today}`)
 - Separate last-used templates per export type
 - Live filename preview in the export panel
-- Export without metadata (strips EXIF/GPS/XMP for privacy)
-- Web-optimized export (resize + compress + strip metadata)
+- Export photos without metadata (strips EXIF/GPS/XMP for privacy)
+- Web-optimized photo export (resize + compress + strip metadata)
 - Duplicate and move operations with progress feedback
 
 ### Supported Formats
 
-| Format | View | Edit & Export |
+| Format | View | Edit / Export |
 |--------|------|---------------|
 | JPEG | ✅ | ✅ |
 | PNG | ✅ | ✅ |
@@ -91,8 +94,11 @@ Picshurs is a spiritual successor to Google's Picasa, carrying forward its philo
 | WebP | ✅ | View only |
 | BMP, GIF | ✅ | View only |
 | RAW (CR2, NEF, ARW, DNG, ORF, PEF, RAF, RW2, SR2, X3F) | ✅ | View only |
+| Video (MP4, MOV, M4V, AVI, MTS/M2TS, 3GP) | Poster thumbnail + default player | Original-file actions only |
 
 RAW files display with a "RAW" badge in the grid. Editing is not supported for RAW — use your RAW processor of choice and re-import the result.
+
+Videos display with a play badge and open inside the same gallery flow as photos. Click the large video poster to launch the file in your macOS default video player. Video editing, trimming, and transcoding are out of scope.
 
 ---
 
@@ -139,9 +145,9 @@ xattr -cr Picshurs.app
 
 1. Launch Picshurs
 2. Add folders to your library — open **Settings → Library**, click **+** to browse and add watched folders. Toggle **Include Subfolders** to scan recursively. Picshurs indexes everything in the background.
-3. Browse, select, and tag — your library builds automatically. Use the sidebar to switch between All Photos, years, or source folders. Assign color dots (`Opt+1`–`8`) to create virtual albums without moving files.
-4. Double-click a photo to view full-size; press **E** to enter edit mode. Crop, straighten, adjust brightness/contrast/saturation, or apply filters — edits are non-destructive and saved as sidecar files.
-5. **The Tray** — a persistent selection strip at the bottom of the window. Pin photos with **P**, drag to reorder, then batch-export, duplicate, move, or delete the entire set. Tray size and row count are adjustable in **Settings → General → Tray**. The tray survives across sessions — your curated picks stay put until you unpin them.
+3. Browse, select, and tag — your library builds automatically. Use the sidebar to switch between All Photos, years, or source folders. Assign color dots (`Opt+1`–`8`) to create virtual albums without moving files. Use **Settings → General → Browsing → Show videos** to include or hide videos.
+4. Double-click a photo or video to open the gallery. Photos can enter edit mode with **E**; videos show a poster frame, and clicking the poster opens your default video player.
+5. **The Tray** — a persistent selection strip at the bottom of the window. Pin items with **P**, drag to reorder, then batch-export, duplicate, move, or delete the entire set. Tray size and row count are adjustable in **Settings → General → Tray**. The tray survives across sessions — your curated picks stay put until you unpin them.
 
 ---
 
@@ -150,9 +156,9 @@ xattr -cr Picshurs.app
 | Key | Action |
 |-----|--------|
 | `Cmd+O` | Open folder |
-| `Enter` | Open photo in viewer |
-| `E` | Toggle edit mode |
-| `Space` | Open/close photo viewer |
+| `Enter` | Open selected item in gallery |
+| `E` | Toggle edit mode for photos |
+| `Space` | Open/close gallery |
 | `Cmd+Y` | Quick Look |
 | `P` | Pin/unpin to tray |
 | `Opt+1`–`8` | Toggle color dot |
@@ -164,10 +170,10 @@ xattr -cr Picshurs.app
 | `Cmd+C` | Copy selected files |
 | `Cmd+Enter` | Reveal in Finder |
 | `F` | Toggle filename labels |
-| `I` | Toggle photo info overlay |
+| `I` | Toggle item info overlay |
 | `Delete` | Move to Trash |
 | `Escape` | Close viewer / exit mode |
-| `← / →` | Navigate photos |
+| `← / →` | Navigate items |
 
 ---
 
@@ -175,12 +181,12 @@ xattr -cr Picshurs.app
 
 | Data | Location | Notes |
 |------|----------|-------|
-| Photo index | `~/Library/Application Support/Picshurs/picshurs.sqlite` | Rebuilt automatically from your folders |
+| Media index | `~/Library/Application Support/Picshurs/picshurs.sqlite` | Rebuilt automatically from your folders |
 | Edit sidecars | `~/Library/Application Support/Picshurs/edits/` | JSON files, one per edited photo |
 | Thumbnail cache | `~/Library/Caches/com.picshurs.thumbnails/` | Safe to delete — rebuilt on demand |
 | Settings | macOS UserDefaults | Standard preferences system |
 
-**Your photos are never copied into or managed by the app.** Deleting the app or its support files does not affect your photo files.
+**Your photos and videos are never copied into or managed by the app.** Deleting the app or its support files does not affect your files.
 
 ---
 
@@ -189,7 +195,7 @@ xattr -cr Picshurs.app
 Picshurs follows a **lightweight MVVM pattern** using Swift's `@Observable` macro. The architecture is built around a few core principles:
 
 - **Single source of truth** — `AppViewModel` holds all UI state
-- **Persistence-first** — Photo metadata lives in SQLite (GRDB); settings in `UserDefaults`
+- **Persistence-first** — Media metadata lives in SQLite (GRDB); settings in `UserDefaults`
 - **Actor-isolated services** — I/O-heavy work (thumbnails, filesystem scanning, database writes) runs in Swift actors to avoid data races
 - **Declarative UI** — Views observe state via `@Environment` and `@Bindable`
 
@@ -215,7 +221,7 @@ DatabaseManager
 - **Vision** — on-device face detection/clustering and text recognition (OCR)
 - **MapKit** — geotagged-photo map
 - **ImageIO** — Thumbnail generation, EXIF + GPS metadata extraction
-- **QuickLookThumbnailing** — RAW and exotic format fallback
+- **QuickLookThumbnailing** — RAW, video, and exotic format thumbnail fallback
 
 ### Key Design Decisions
 
@@ -236,7 +242,7 @@ App.swift
 │   ├── SidebarView (navigation, library folders, virtual albums)
 │   ├── WelcomeView (empty state / onboarding)
 │   ├── PhotoGridView (browse, marquee selection, drag-to-reorder)
-│   ├── PhotoDetailView (focus viewer, zoom/pan, swipe navigation)
+│   ├── PhotoDetailView (gallery viewer, video posters, zoom/pan, swipe navigation)
 │   ├── EditSidebarView (adjustment layers, sliders, filters, crop/straighten)
 │   ├── PhotoTrayView (working set, batch export)
 │   ├── MapView (geotagged photo map)

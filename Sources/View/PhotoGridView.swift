@@ -12,7 +12,7 @@ struct PhotoGridView: View {
     var body: some View {
         Group {
             if viewModel.isLoading {
-                ProgressView("Scanning images...")
+                ProgressView("Scanning media...")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if viewModel.filteredPhotos.isEmpty {
                 emptyView
@@ -21,8 +21,6 @@ struct PhotoGridView: View {
             }
         }
         .onChange(of: viewModel.displayMode) { _, _ in
-            viewModel.temporarilySelectedPhotos = []
-            viewModel.selectedPhoto = nil
             lastSelectedPhoto = nil
         }
         .onChange(of: viewModel.photos.count) { _, _ in
@@ -380,6 +378,12 @@ struct PhotoGridView: View {
                 Divider()
             }
 
+            if photo.isVideo {
+                Button("Open Video") {
+                    viewModel.openVideoInDefaultPlayer(photo)
+                }
+            }
+
             Button("Show in Finder") {
                 NSWorkspace.shared.selectFile(photo.url.path, inFileViewerRootedAtPath: "")
             }
@@ -408,13 +412,13 @@ struct PhotoGridView: View {
         } else if case let .dot(color) = viewModel.displayMode {
             contextualEmptyState(
                 icon: "circle.fill",
-                title: "No photos tagged \(DotColor.name(for: color) ?? "this color")",
-                subtitle: "Tag photos with ⌥\(color) or via the right-click menu."
+                title: "No items tagged \(DotColor.name(for: color) ?? "this color")",
+                subtitle: "Tag items with ⌥\(color) or via the right-click menu."
             )
         } else if case let .year(year) = viewModel.displayMode {
             contextualEmptyState(
                 icon: "calendar",
-                title: "No photos from \(String(year))",
+                title: "No items from \(String(year))",
                 subtitle: "Try another year in the sidebar."
             )
         } else if viewModel.displayMode == .tray {
@@ -426,8 +430,8 @@ struct PhotoGridView: View {
         } else if !viewModel.libraryFolders.isEmpty {
             contextualEmptyState(
                 icon: "photo.on.rectangle.angled",
-                title: "No photos here",
-                subtitle: "This folder has no photos, or they were filtered out."
+                title: "No items here",
+                subtitle: "This folder has no supported media, or it was filtered out."
             )
         } else {
             WelcomeView()
@@ -628,6 +632,7 @@ private struct MarqueeGrid<Cell: View>: View {
 
         viewModel.temporarilySelectedPhotos = newSelection
         viewModel.selectedPhoto = newSelection.first
+        viewModel.clearExternalVideoReturnStateIfSelectionChanged()
     }
 }
 
@@ -856,6 +861,7 @@ private struct TrayReorderGrid<Cell: View>: View {
 
         viewModel.temporarilySelectedPhotos = newSelection
         viewModel.selectedPhoto = newSelection.first
+        viewModel.clearExternalVideoReturnStateIfSelectionChanged()
     }
 }
 
@@ -880,7 +886,7 @@ private struct ThumbnailCellView: View {
         ZStack(alignment: .bottom) {
             // Reflect the sidecar rotation edit — square cells make 90° steps
             // map exactly onto the same footprint, so this is free.
-            ThumbnailImage(url: photo.url, modificationDate: photo.modificationDate, fill: !useAspect)
+            ThumbnailImage(url: photo.url, modificationDate: photo.modificationDate, mediaKind: photo.mediaKind, fill: !useAspect)
                 .frame(width: size, height: size)
                 .clipped()
                 .rotationEffect(.degrees(Double(viewModel.editRotation(for: photo.url))))
@@ -954,9 +960,12 @@ private struct ThumbnailCellView: View {
                     .padding(5)
             }
         }
-        // Bottom-right: RAW badge
+        // Bottom-right: media badge
         .overlay(alignment: .bottomTrailing) {
-            if photo.isRaw {
+            if photo.isVideo {
+                VideoBadge(size: 10)
+                    .padding(5)
+            } else if photo.isRaw {
                 Text("RAW")
                     .font(.system(size: 8, weight: .bold))
                     .foregroundStyle(.white)
@@ -976,4 +985,3 @@ private struct ThumbnailCellView: View {
         }
     }
 }
-

@@ -3,15 +3,17 @@ import SwiftUI
 struct ThumbnailImage: View {
     let url: URL
     let modificationDate: Date
+    let mediaKind: MediaKind
     var fill: Bool = true
 
     @State private var image: CGImage?
     @State private var opacity: Double
     @State private var loadTask: Task<Void, Never>?
 
-    init(url: URL, modificationDate: Date, fill: Bool = true) {
+    init(url: URL, modificationDate: Date, mediaKind: MediaKind = .image, fill: Bool = true) {
         self.url = url
         self.modificationDate = modificationDate
+        self.mediaKind = mediaKind
         self.fill = fill
         // Seed from the memory cache so a cell that SwiftUI recreates (e.g. its
         // selection state changed identity) renders its image on the first
@@ -42,7 +44,8 @@ struct ThumbnailImage: View {
             loadTask = Task {
                 let result = await ThumbnailService.shared.thumbnail(
                     for: url,
-                    modificationDate: modificationDate
+                    modificationDate: modificationDate,
+                    mediaKind: mediaKind
                 )
                 if !Task.isCancelled {
                     image = result
@@ -83,4 +86,17 @@ struct ShimmerModifier: ViewModifier {
 
 extension View {
     func shimmering() -> some View { modifier(ShimmerModifier()) }
+}
+
+struct VideoBadge: View {
+    var size: CGFloat = 12
+
+    var body: some View {
+        Image(systemName: "play.fill")
+            .font(.system(size: size, weight: .semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, max(4, size * 0.45))
+            .padding(.vertical, max(3, size * 0.25))
+            .background(.black.opacity(0.68), in: Capsule())
+    }
 }

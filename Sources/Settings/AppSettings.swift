@@ -11,6 +11,10 @@ final class AppSettings {
         get { _showFilenameLabels }
         set { _showFilenameLabels = newValue; sync() }
     }
+    var showVideos: Bool {
+        get { _showVideos }
+        set { _showVideos = newValue; sync() }
+    }
     var defaultThumbnailSize: Double {
         get { _defaultThumbnailSize }
         set { _defaultThumbnailSize = newValue; sync() }
@@ -83,6 +87,7 @@ final class AppSettings {
     // Internal storage
     private var _confirmBeforeTrash: Bool
     private var _showFilenameLabels: Bool
+    private var _showVideos: Bool
     private var _preserveAspectRatio: Bool
     private var _defaultThumbnailSize: Double
     private var _trayThumbnailSize: Double
@@ -103,6 +108,7 @@ final class AppSettings {
     init() {
         _confirmBeforeTrash   = defaults.object(forKey: keyPrefix + "confirmBeforeTrash")   as? Bool   ?? true
         _showFilenameLabels   = defaults.object(forKey: keyPrefix + "showFilenameLabels")   as? Bool   ?? false
+        _showVideos           = defaults.object(forKey: keyPrefix + "showVideos")           as? Bool   ?? true
         _preserveAspectRatio  = defaults.object(forKey: keyPrefix + "preserveAspectRatio")  as? Bool   ?? false
         _defaultThumbnailSize = defaults.object(forKey: keyPrefix + "defaultThumbnailSize") as? Double ?? 160
         _trayThumbnailSize    = defaults.object(forKey: keyPrefix + "trayThumbnailSize")    as? Double ?? 60
@@ -121,6 +127,7 @@ final class AppSettings {
     private func sync() {
         defaults.set(_confirmBeforeTrash, forKey: keyPrefix + "confirmBeforeTrash")
         defaults.set(_showFilenameLabels, forKey: keyPrefix + "showFilenameLabels")
+        defaults.set(_showVideos, forKey: keyPrefix + "showVideos")
         defaults.set(_preserveAspectRatio, forKey: keyPrefix + "preserveAspectRatio")
         defaults.set(_defaultThumbnailSize, forKey: keyPrefix + "defaultThumbnailSize")
         defaults.set(_trayThumbnailSize, forKey: keyPrefix + "trayThumbnailSize")
@@ -139,6 +146,7 @@ final class AppSettings {
     func resetToDefaults() {
         _confirmBeforeTrash = true
         _showFilenameLabels = false
+        _showVideos = true
         _preserveAspectRatio = false
         _defaultThumbnailSize = 160
         _trayThumbnailSize = 60

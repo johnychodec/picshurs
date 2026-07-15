@@ -8,6 +8,7 @@ struct SettingsView: View {
     // General drafts
     @State private var draftConfirmBeforeTrash = false
     @State private var draftShowFilenameLabels = true
+    @State private var draftShowVideos = true
     @State private var draftPreserveAspectRatio = true
     @State private var draftDefaultThumbnailSize: Double = 160
     @State private var draftTrayThumbnailSize: Double = 60
@@ -30,6 +31,7 @@ struct SettingsView: View {
                 GeneralSettingsView(
                     confirmBeforeTrash: $draftConfirmBeforeTrash,
                     showFilenameLabels: $draftShowFilenameLabels,
+                    showVideos: $draftShowVideos,
                     preserveAspectRatio: $draftPreserveAspectRatio,
                     defaultThumbnailSize: $draftDefaultThumbnailSize,
                     trayThumbnailSize: $draftTrayThumbnailSize,
@@ -85,6 +87,7 @@ struct SettingsView: View {
         .onAppear {
             draftConfirmBeforeTrash = settings.confirmBeforeTrash
             draftShowFilenameLabels = settings.showFilenameLabels
+            draftShowVideos = settings.showVideos
             draftPreserveAspectRatio = settings.preserveAspectRatio
             draftDefaultThumbnailSize = settings.defaultThumbnailSize
             draftTrayThumbnailSize = settings.trayThumbnailSize
@@ -103,6 +106,8 @@ struct SettingsView: View {
         // General settings
         settings.confirmBeforeTrash = draftConfirmBeforeTrash
         settings.showFilenameLabels = draftShowFilenameLabels
+        let wasShowingVideos = settings.showVideos
+        settings.showVideos = draftShowVideos
         settings.preserveAspectRatio = draftPreserveAspectRatio
         settings.defaultThumbnailSize = draftDefaultThumbnailSize
         settings.trayThumbnailSize = draftTrayThumbnailSize
@@ -119,6 +124,9 @@ struct SettingsView: View {
         }
         if (!draftEnableMap && viewModel.displayMode == .map) || (!draftEnableFaces && viewingFaces) {
             viewModel.openAllPhotos()
+        }
+        if wasShowingVideos != draftShowVideos {
+            viewModel.handleVideoVisibilityChanged()
         }
         settings.webExportMaxDimension = draftWebExportMaxDimension
         settings.webExportQuality = draftWebExportQuality
@@ -159,6 +167,7 @@ struct SettingsView: View {
     private func resetToDefaults() {
         draftConfirmBeforeTrash = true
         draftShowFilenameLabels = true
+        draftShowVideos = true
         draftPreserveAspectRatio = true
         draftDefaultThumbnailSize = 160
         draftTrayThumbnailSize = 60
